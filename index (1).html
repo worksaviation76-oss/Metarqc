@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>METAR QC — MFD Watch Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0B1116;
+    --panel:#121B23;
+    --panel-2:#0E161C;
+    --phosphor:#4CE0B3;
+    --caution:#E8A33D;
+    --alert:#E8523D;
+    --text:#C9D3D9;
+    --text-dim:#5A6B75;
+    --hair:#233039;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:'IBM Plex Sans',system-ui,sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px;}
+
+  /* Header */
+  header{
+    display:flex;align-items:baseline;justify-content:space-between;
+    padding-bottom:16px;border-bottom:1px solid var(--hair);
+    flex-wrap:wrap;gap:10px;
+  }
+  .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;}
+  .brand h1{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:22px;font-weight:600;letter-spacing:0.5px;
+    margin:0;color:#fff;
+  }
+  .brand span.sub{font-size:13px;color:var(--text-dim);}
+  .clock{font-family:'IBM Plex Mono',monospace;font-size:14px;color:var(--text-dim);text-align:right;}
+  .clock b{color:var(--phosphor);font-weight:500;}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;position:relative;top:-1px;}
+  .dot.ok{background:var(--phosphor);box-shadow:0 0 6px var(--phosphor);}
+  .dot.bad{background:var(--alert);box-shadow:0 0 6px var(--alert);}
+  .dot.idle{background:var(--text-dim);}
+
+  /* Controls */
+  .controls{
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    margin:18px 0;padding:14px 16px;
+    background:var(--panel);border:1px solid var(--hair);
+  }
+  .controls label{font-size:12px;color:var(--text-dim);margin-right:2px;}
+  input[type=text]{
+    background:var(--panel-2);border:1px solid var(--hair);color:#fff;
+    font-family:'IBM Plex Mono',monospace;font-size:14px;
+    padding:8px 10px;letter-spacing:1px;width:110px;
+  }
+  input[type=text]:focus{outline:1px solid var(--phosphor);}
+  button{
+    font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;
+    padding:9px 14px;border:1px solid var(--hair);background:var(--panel-2);
+    color:var(--text);cursor:pointer;letter-spacing:0.2px;
+  }
+  button:hover{border-color:var(--phosphor);color:#fff;}
+  button.primary{background:var(--phosphor);border-color:var(--phosphor);color:#03110C;}
+  button.primary:hover{filter:brightness(1.08);}
+  button.armed{background:var(--alert);border-color:var(--alert);color:#fff;}
+  .spacer{flex:1;}
+  .autorefresh{font-size:12px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;}
+
+  /* Strip */
+  .strip-label{font-size:11px;color:var(--text-dim);margin-bottom:6px;letter-spacing:0.3px;}
+  .strip{
+    background:var(--panel-2);border:1px solid var(--hair);
+    padding:20px 18px;margin-bottom:4px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:clamp(14px,2.4vw,19px);
+    color:var(--phosphor);letter-spacing:1px;
+    line-height:1.6;word-break:break-word;min-height:34px;
+  }
+  .strip.empty{color:var(--text-dim);font-size:14px;letter-spacing:0.4px;}
+  .strip-meta{font-size:12px;color:var(--text-dim);margin:6px 0 20px;font-family:'IBM Plex Mono',monospace;}
+
+  /* Manual entry */
+  .manual{margin-bottom:26px;}
+  .manual-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .manual textarea{
+    flex:1;min-width:260px;
+    background:var(--panel-2);border:1px solid var(--hair);color:#fff;
+    font-family:'IBM Plex Mono',monospace;font-size:13px;
+    padding:9px 10px;resize:vertical;min-height:38px;letter-spacing:0.4px;
+  }
+  .manual textarea:focus{outline:1px solid var(--phosphor);}
+
+  /* Alert banner */
+  .banner{
+    display:none;
+    padding:14px 16px;margin-bottom:20px;
+    border:1px solid var(--alert);background:rgba(232,82,61,0.08);
+    color:var(--alert);font-weight:600;font-size:14px;
+    align-items:center;gap:10px;
+  }
+  .banner.show{display:flex;}
+  .banner.pulse{animation:pulse 1s ease-in-out 2;}
+  @keyframes pulse{0%,100%{background:rgba(232,82,61,0.08);}50%{background:rgba(232,82,61,0.22);}}
+
+  /* Two-column layout */
+  .grid{display:grid;grid-template-columns:1.3fr 1fr;gap:24px;}
+  @media (max-width:820px){.grid{grid-template-columns:1fr;}}
+
+  .panel-title{
+    font-size:12px;color:var(--text-dim);letter-spacing:0.4px;
+    padding-bottom:8px;margin-bottom:2px;border-bottom:1px solid var(--hair);
+  }
+
+  /* Checklist */
+  .check-row{
+    display:grid;grid-template-columns:110px 1fr 20px;gap:12px;align-items:start;
+    padding:12px 0;border-bottom:1px solid var(--hair);
+  }
+  .check-row:last-child{border-bottom:none;}
+  .check-name{font-size:12px;color:var(--text-dim);font-weight:600;padding-top:2px;}
+  .check-val{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--text);}
+  .check-val .note{display:block;font-family:'IBM Plex Sans',sans-serif;font-size:12px;color:var(--text-dim);margin-top:3px;}
+  .mark{font-size:14px;text-align:center;padding-top:2px;}
+  .mark.ok{color:var(--phosphor);}
+  .mark.warn{color:var(--caution);}
+  .mark.err{color:var(--alert);}
+
+  /* Alerts log */
+  .log{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+  .log-item{
+    padding:9px 10px;font-size:13px;border-left:2px solid var(--hair);
+    background:var(--panel-2);
+  }
+  .log-item.err{border-color:var(--alert);color:#F2A99A;}
+  .log-item.warn{border-color:var(--caution);color:#F0CB92;}
+  .log-item.none{border-color:var(--hair);color:var(--text-dim);font-style:normal;}
+
+  .sidepanel{background:var(--panel);border:1px solid var(--hair);padding:16px;height:fit-content;}
+  .sidepanel + .sidepanel{margin-top:20px;}
+
+  footer{margin-top:36px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--hair);padding-top:14px;}
+  footer a{color:var(--text-dim);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <h1>METAR QC</h1>
+      <span class="sub">MFD Aviation Met Watch — encoding &amp; significant-weather check</span>
+    </div>
+    <div class="clock"><span class="dot idle" id="statusDot"></span><b id="clockTime">--:--:--Z</b><br><span id="clockDate">-- --- ----</span></div>
+  </header>
+
+  <div class="controls">
+    <label for="icaoInput">Station</label>
+    <input type="text" id="icaoInput" value="VNKT" maxlength="4" style="text-transform:uppercase">
+    <button class="primary" id="fetchBtn">Fetch latest</button>
+    <span class="spacer"></span>
+    <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
+    <button id="autoBtn">Auto-refresh 2 min</button>
+    <button id="sirenBtn">Arm audio alert</button>
+  </div>
+
+  <div class="strip-label">RAW OBSERVATION</div>
+  <div class="strip empty" id="rawStrip">No observation loaded yet — fetch a station or paste a METAR below.</div>
+  <div class="strip-meta" id="stripMeta">&nbsp;</div>
+
+  <div class="manual">
+    <div class="strip-label">MANUAL CHECK</div>
+    <div class="manual-row">
+      <textarea id="manualInput" placeholder="Paste a raw METAR/SPECI here, e.g. VNKT 171200Z 09006KT 6000 HZ SCT025 28/21 Q1006 NOSIG"></textarea>
+      <button id="manualBtn">Check pasted METAR</button>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="grid">
+    <div>
+      <div class="panel-title">DECODED GROUPS</div>
+      <div id="checklist"></div>
+    </div>
+    <div>
+      <div class="sidepanel">
+        <div class="panel-title" style="border:none;padding:0;margin:0 0 10px;">ALERT LOG</div>
+        <div class="log" id="logList"><div class="log-item none">No observation checked yet.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Rules cover core ICAO Annex 3 / WMO No. 782 group formatting for METAR/SPECI. Trend and remark contents are not deep-validated. Default station VNKT (Tribhuvan Intl). Source: aviationweather.gov.
+  </footer>
+
+</div>
+
+<script>
+/* ---------- Clock ---------- */
+function tickClock(){
+  const now = new Date();
+  const hh = String(now.getUTCHours()).padStart(2,'0');
+  const mm = String(now.getUTCMinutes()).padStart(2,'0');
+  const ss = String(now.getUTCSeconds()).padStart(2,'0');
+  document.getElementById('clockTime').textContent = `${hh}:${mm}:${ss}Z`;
+  const months=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  document.getElementById('clockDate').textContent =
+    `${String(now.getUTCDate()).padStart(2,'0')} ${months[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+}
+setInterval(tickClock,1000); tickClock();
+
+/* ---------- Siren (Web Audio) ---------- */
+let audioCtx=null, sirenOn=false, sirenTimer=null, armed=false;
+function ensureCtx(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+function sirenPulse(){
+  ensureCtx();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type='square';
+  osc.frequency.setValueAtTime(700, audioCtx.currentTime);
+  osc.frequency.linearRampToValueAtTime(1000, audioCtx.currentTime+0.35);
+  osc.frequency.linearRampToValueAtTime(700, audioCtx.currentTime+0.7);
+  gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime+0.05);
+  gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime+0.7);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime+0.72);
+}
+function startSiren(){ if(sirenOn) return; sirenOn=true; sirenPulse(); sirenTimer=setInterval(sirenPulse,900); }
+function stopSiren(){ sirenOn=false; if(sirenTimer) clearInterval(sirenTimer); sirenTimer=null; }
+
+document.getElementById('sirenBtn').addEventListener('click', ()=>{
+  armed = !armed;
+  const btn = document.getElementById('sirenBtn');
+  if(armed){
+    ensureCtx();
+    btn.textContent='Audio alert armed — click to mute';
+    btn.classList.add('armed');
+  } else {
+    btn.textContent='Arm audio alert';
+    btn.classList.remove('armed');
+    stopSiren();
+  }
+});
+
+/* ---------- METAR PARSER ---------- */
+const WX_PHENOM = 'DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS';
+const WX_RE = new RegExp(`^(\\+|-|VC)?(?:(?:MI|PR|BC|DR|BL|SH|FZ)?(?:${WX_PHENOM}){1,4}|TS(?:${WX_PHENOM})*)$`);
+const WIND_RE = /^(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?(KT|MPS|KMH)$/;
+const WINDVAR_RE = /^\d{3}V\d{3}$/;
+const VIS4_RE = /^(\d{4})(NDV)?$/;
+const VISSM_RE = /^(M|P)?\d{1,2}(\/\d{1,2})?SM$/;
+const RVR_RE = /^R\d{2}[LCR]?\/[MP]?\d{4}(V[MP]?\d{4})?(FT)?[UDN]?$/;
+const CLOUD_RE = /^(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?$/;
+const VV_RE = /^VV(\d{3}|\/\/\/)$/;
+const TEMPDEW_RE = /^(M?\d{2})\/(M?\d{2})$/;
+const TEMPDEW_MISSING_RE = /^(M?\d{2})\/\/?$/;
+const QNH_RE = /^[QA]\d{4}$/;
+
+function parseMetar(raw){
+  const errors=[], warnings=[], groups={};
+  const clean = raw.trim().toUpperCase().replace(/\s+/g,' ');
+  if(!clean){ errors.push('Empty observation.'); return {errors,warnings,groups,clean}; }
+  let t = clean.split(' ');
+  let i = 0;
+  const next=()=>t[i];
+  const consume=()=>t[i++];
+
+  if(/^(METAR|SPECI)$/.test(next())) { groups.reportType = consume(); }
+
+  // Station
+  if(/^[A-Z]{4}$/.test(next()||'')){ groups.station = consume(); }
+  else { errors.push('Missing or invalid 4-letter ICAO station identifier.'); }
+
+  // Time
+  if(/^\d{6}Z$/.test(next()||'')){ groups.time = consume(); }
+  else { errors.push('Missing or invalid day/time group (expected DDHHMMZ).'); }
+
+  // AUTO/COR
+  if(/^(AUTO|COR)$/.test(next()||'')) groups.modifier = consume();
+
+  // Wind
+  if(WIND_RE.test(next()||'')){
+    const m = next().match(WIND_RE);
+    groups.wind = consume();
+    const dir=m[1], spd=parseInt(m[2],10), gust=m[4]?parseInt(m[4],10):null;
+    if(dir!=='VRB'){ const d=parseInt(dir,10); if(d>360) errors.push(`Wind direction ${dir}° exceeds 360°.`); }
+    if(spd>=34 || (gust && gust>=34)) warnings.push(`Gale-force wind reported (${groups.wind}).`);
+    if(spd>199) errors.push(`Wind speed ${spd} looks implausible — check coding.`);
+  } else {
+    errors.push('Missing or invalid wind group (expected dddffGffKT/MPS or VRB).');
+  }
+  if(WINDVAR_RE.test(next()||'')) groups.windVar = consume();
+
+  // Visibility / CAVOK
+  if(next()==='CAVOK'){
+    groups.visibility = consume();
+  } else if(VIS4_RE.test(next()||'') || VISSM_RE.test(next()||'')){
+    groups.visibility = consume();
+    const m4 = groups.visibility.match(VIS4_RE);
+    if(m4){
+      const v=parseInt(m4[1],10);
+      if(v<1500) warnings.push(`Low visibility reported (${v} m).`);
+    }
+  } else {
+    errors.push('Missing or invalid visibility group.');
+  }
+  const rvr=[];
+  while(RVR_RE.test(next()||'')) rvr.push(consume());
+  if(rvr.length) groups.rvr = rvr.join(' ');
+
+  // Present weather
+  const wx=[];
+  while(WX_RE.test(next()||'') && wx.length<4) wx.push(consume());
+  if(wx.length){
+    groups.weather = wx.join(' ');
+    if(wx.some(w=>w.includes('TS'))) warnings.push('Thunderstorm reported at or near the aerodrome.');
+    if(wx.some(w=>w.includes('FZ'))) warnings.push('Freezing precipitation/fog reported.');
+    if(wx.some(w=>/^\+/.test(w))) warnings.push(`Heavy-intensity weather reported (${wx.find(w=>/^\+/.test(w))}).`);
+    if(groups.visibility==='CAVOK') errors.push('Present weather reported alongside CAVOK, which is inconsistent.');
+  }
+
+  // Cloud
+  const cloud=[];
+  if(/^(NSC|NCD|SKC|CLR)$/.test(next()||'')) cloud.push(consume());
+  else {
+    while(CLOUD_RE.test(next()||'') || VV_RE.test(next()||'')){
+      const tok=consume(); cloud.push(tok);
+      const vvm = tok.match(VV_RE);
+      const clm = tok.match(CLOUD_RE);
+      if(vvm && vvm[1]!=='///'){ if(parseInt(vvm[1],10)<=2) warnings.push(`Very low vertical visibility (${tok}).`); }
+      if(clm){ const base=parseInt(clm[2],10); if((clm[1]==='BKN'||clm[1]==='OVC') && base<=3) warnings.push(`Low ceiling reported (${tok}).`); }
+    }
+  }
+  if(cloud.length) groups.cloud = cloud.join(' ');
+  else if(groups.visibility!=='CAVOK') warnings.push('No cloud group reported (expected NSC/SKC or cloud layers unless CAVOK).');
+
+  // Temp/dewpoint
+  if(TEMPDEW_RE.test(next()||'')){ groups.tempDew = consume(); }
+  else if(TEMPDEW_MISSING_RE.test(next()||'')){ groups.tempDew=consume(); warnings.push('Dew point missing from temperature group.'); }
+  else { errors.push('Missing or invalid temperature/dew-point group (expected TT/TT, M for negative).'); }
+
+  // QNH
+  if(QNH_RE.test(next()||'')){ groups.qnh = consume(); }
+  else { errors.push('Missing or invalid altimeter/QNH group (expected Qxxxx or Axxxx).'); }
+
+  // Trend
+  if(next()==='NOSIG'){ groups.trend = consume(); }
+  else if(/^(BECMG|TEMPO)$/.test(next()||'')){
+    const trend=[consume()];
+    while(i<t.length && t[i]!=='RMK') trend.push(consume());
+    groups.trend = trend.join(' ');
+  }
+
+  // Remarks
+  if(next()==='RMK'){
+    const rmk=[]; consume();
+    while(i<t.length) rmk.push(consume());
+    groups.remarks = rmk.join(' ');
+  }
+
+  // Trailing free text (e.g. local supplementary notes not preceded by RMK)
+  if(i<t.length){
+    groups.extra = t.slice(i).join(' ');
+  }
+
+  return {errors,warnings,groups,clean};
+}
+
+/* ---------- Observation-to-observation comparison (catch implausible jumps) ---------- */
+const lastByStation = {};
+const TEMP_JUMP_THRESHOLD = 5;   // °C between consecutive obs
+const DEW_JUMP_THRESHOLD = 5;    // °C
+const QNH_JUMP_THRESHOLD = 3;    // hPa
+const WIND_SPEED_JUMP_THRESHOLD = 15; // kt
+
+function tempValue(s){ return s.startsWith('M') ? -parseInt(s.slice(1),10) : parseInt(s,10); }
+
+function compareToPrevious(icao, groups){
+  const cautions = [];
+  const prev = lastByStation[icao];
+  if(prev && prev.time !== groups.time){
+    if(prev.tempDew && groups.tempDew){
+      const [pt] = prev.tempDew.split('/'); const [ct] = groups.tempDew.split('/');
+      if(/^M?\d{2}$/.test(pt) && /^M?\d{2}$/.test(ct)){
+        const diff = Math.abs(tempValue(ct)-tempValue(pt));
+        if(diff >= TEMP_JUMP_THRESHOLD) cautions.push(`Temperature changed sharply since last observation (${pt}°C → ${ct}°C).`);
+      }
+      const pd = prev.tempDew.split('/')[1], cd = groups.tempDew.split('/')[1];
+      if(pd && cd && /^M?\d{2}$/.test(pd) && /^M?\d{2}$/.test(cd)){
+        const diff = Math.abs(tempValue(cd)-tempValue(pd));
+        if(diff >= DEW_JUMP_THRESHOLD) cautions.push(`Dew point changed sharply since last observation (${pd}°C → ${cd}°C).`);
+      }
+    }
+    if(prev.qnh && groups.qnh && prev.qnh[0]==='Q' && groups.qnh[0]==='Q'){
+      const diff = Math.abs(parseInt(groups.qnh.slice(1),10) - parseInt(prev.qnh.slice(1),10));
+      if(diff >= QNH_JUMP_THRESHOLD) cautions.push(`QNH changed sharply since last observation (${prev.qnh} → ${groups.qnh}).`);
+    }
+    if(prev.wind && groups.wind){
+      const pm = prev.wind.match(WIND_RE), cm = groups.wind.match(WIND_RE);
+      if(pm && cm){
+        const diff = Math.abs(parseInt(cm[2],10) - parseInt(pm[2],10));
+        if(diff >= WIND_SPEED_JUMP_THRESHOLD) cautions.push(`Wind speed changed sharply since last observation (${prev.wind} → ${groups.wind}).`);
+      }
+    }
+  }
+  lastByStation[icao] = groups;
+  return cautions;
+}
+
+/* ---------- Rendering ---------- */
+const CHECK_ROWS = [
+  ['STATION/TIME', r=>[r.groups.station, r.groups.time].filter(Boolean).join(' '), r=>!r.groups.station || !r.groups.time],
+  ['WIND', r=>[r.groups.wind, r.groups.windVar].filter(Boolean).join(' '), r=>!r.groups.wind],
+  ['VISIBILITY', r=>[r.groups.visibility, r.groups.rvr].filter(Boolean).join(' '), r=>!r.groups.visibility],
+  ['WEATHER', r=>r.groups.weather||'—', r=>false],
+  ['CLOUD', r=>r.groups.cloud||'—', r=>false],
+  ['TEMP/DEW', r=>r.groups.tempDew, r=>!r.groups.tempDew],
+  ['QNH', r=>r.groups.qnh, r=>!r.groups.qnh],
+  ['TREND', r=>r.groups.trend||'—', r=>false],
+  ['SUPPL. TEXT', r=>r.groups.extra||'—', r=>false],
+];
+
+function renderResult(result, sourceLabel){
+  const {errors,warnings,groups,clean} = result;
+
+  const stripEl = document.getElementById('rawStrip');
+  stripEl.textContent = clean;
+  stripEl.classList.remove('empty');
+  document.getElementById('stripMeta').textContent = sourceLabel;
+
+  // checklist
+  const cl = document.getElementById('checklist');
+  cl.innerHTML='';
+  CHECK_ROWS.forEach(([name,getVal,isErr])=>{
+    const val = getVal(result) || '—';
+    const bad = isErr(result);
+    const row = document.createElement('div');
+    row.className='check-row';
+    row.innerHTML = `<div class="check-name">${name}</div>
+      <div class="check-val">${val}</div>
+      <div class="mark ${bad?'err':'ok'}">${bad?'✕':'✓'}</div>`;
+    cl.appendChild(row);
+  });
+
+  // log
+  const log = document.getElementById('logList');
+  log.innerHTML='';
+  if(!errors.length && !warnings.length){
+    log.innerHTML = '<div class="log-item none">No coding errors or significant weather flagged.</div>';
+  } else {
+    errors.forEach(e=>{
+      const d=document.createElement('div'); d.className='log-item err'; d.textContent='ERROR — '+e; log.appendChild(d);
+    });
+    warnings.forEach(w=>{
+      const d=document.createElement('div'); d.className='log-item warn'; d.textContent='CAUTION — '+w; log.appendChild(d);
+    });
+  }
+
+  // banner + status dot + siren
+  const banner = document.getElementById('banner');
+  const dot = document.getElementById('statusDot');
+  const hasIssue = errors.length>0 || warnings.length>0;
+  if(hasIssue){
+    banner.className = 'banner show pulse';
+    banner.textContent = errors.length
+      ? `${errors.length} coding error(s) and ${warnings.length} weather caution(s) flagged.`
+      : `${warnings.length} significant-weather caution(s) flagged.`;
+    setTimeout(()=>banner.classList.remove('pulse'), 2000);
+    dot.className = 'dot bad';
+    if(armed) startSiren();
+  } else {
+    banner.className = 'banner';
+    dot.className = 'dot ok';
+    stopSiren();
+  }
+}
+
+/* ---------- Fetching ---------- */
+// If you deploy your own Cloudflare Worker proxy (recommended — see setup notes),
+// paste its URL here, e.g. 'https://metar-proxy.yourname.workers.dev'
+const CUSTOM_PROXY = 'https://metar-proxy.nepali-ddhakal.workers.dev';
+
+function extractMetarLine(text){
+  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+  return lines.find(l=>/^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(l)) || lines[0] || null;
+}
+
+async function fetchStation(icao){
+  const directUrl = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
+  const proxies = [];
+  if(CUSTOM_PROXY) proxies.push(u => `${CUSTOM_PROXY}?url=${encodeURIComponent(u)}`);
+  proxies.push(
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://r.jina.ai/${u}`
+  );
+
+  // Try direct first
+  try{
+    const res = await fetch(directUrl);
+    if(res.ok){
+      const text = await res.text();
+      const line = extractMetarLine(text);
+      if(line) return {line, via:'direct'};
+    }
+  } catch(e){ /* fall through to proxies */ }
+
+  // Try each proxy in turn
+  for(const build of proxies){
+    try{
+      const res = await fetch(build(directUrl));
+      if(!res.ok) continue;
+      const text = await res.text();
+      const line = extractMetarLine(text);
+      if(line && /^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(line)) return {line, via:'proxy'};
+    } catch(e){ /* try next proxy */ }
+  }
+
+  throw new Error('ALL_ROUTES_FAILED');
+}
+
+async function doFetch(){
+  const icao = document.getElementById('icaoInput').value.trim().toUpperCase();
+  if(!/^[A-Z]{4}$/.test(icao)){ alert('Enter a valid 4-letter ICAO station code.'); return; }
+  const btn = document.getElementById('fetchBtn');
+  btn.textContent='Fetching…'; btn.disabled=true;
+  try{
+    const {line, via} = await fetchStation(icao);
+    const result = parseMetar(line);
+    const trendCautions = compareToPrevious(icao, result.groups);
+    result.warnings = result.warnings.concat(trendCautions);
+    const viaLabel = via==='proxy' ? 'via backup proxy (direct connection blocked)' : 'direct';
+    renderResult(result, `Live from aviationweather.gov · ${icao} · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
+  } catch(err){
+    document.getElementById('statusDot').className='dot bad';
+    const log = document.getElementById('logList');
+    let hint;
+    if(location.protocol==='file:'){
+      hint = 'This page is open as a local file (file://), which browsers block from making live network requests. Serve it over http(s) — e.g. GitHub Pages, or run a local server — and this will work.';
+    } else if(err.message==='ALL_ROUTES_FAILED'){
+      hint = 'The direct connection and all backup routes failed. If you can open aviationweather.gov directly in a browser tab but the app still can\'t reach it, this is very likely an ad-blocker, privacy extension, or corporate security proxy blocking script-based requests on this browser — try an incognito window with extensions off, or a different browser, to confirm.';
+    } else {
+      hint = err.message;
+    }
+    log.innerHTML = `<div class="log-item err">ERROR — Could not fetch ${icao} live. ${hint} You can still paste a METAR manually below.</div>`;
+  } finally {
+    btn.textContent='Fetch latest'; btn.disabled=false;
+  }
+}
+document.getElementById('fetchBtn').addEventListener('click', doFetch);
+
+document.getElementById('manualBtn').addEventListener('click', ()=>{
+  const raw = document.getElementById('manualInput').value;
+  if(!raw.trim()){ alert('Paste a METAR to check.'); return; }
+  const result = parseMetar(raw);
+  renderResult(result, 'Manually entered observation');
+});
+
+/* ---------- Auto refresh ---------- */
+let autoTimer=null, autoOn=false, countdown=0;
+function updateRefreshLabel(){
+  document.getElementById('refreshLabel').textContent = autoOn
+    ? `Next refresh in ${countdown}s`
+    : 'Auto-refresh off';
+}
+function setAuto(on){
+  autoOn = on;
+  const btn=document.getElementById('autoBtn');
+  if(autoTimer) clearInterval(autoTimer);
+  if(autoOn){
+    btn.textContent='Stop auto-refresh';
+    countdown=120;
+    updateRefreshLabel();
+    autoTimer = setInterval(()=>{
+      countdown--;
+      if(countdown<=0){ doFetch(); countdown=120; }
+      updateRefreshLabel();
+    },1000);
+  } else {
+    btn.textContent='Auto-refresh 2 min';
+    updateRefreshLabel();
+  }
+}
+document.getElementById('autoBtn').addEventListener('click', ()=> setAuto(!autoOn));
+
+/* Initial load — auto-refresh is on by default */
+doFetch();
+setAuto(true);
+</script>
+</body>
+</html>
