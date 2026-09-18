@@ -184,6 +184,17 @@
     </div>
   </div>
 
+  <div class="controls" style="margin-top:0;">
+    <label>TAF</label>
+    <button class="primary" id="tafFetchBtn">Fetch latest TAF</button>
+    <span class="spacer"></span>
+    <span class="autorefresh" id="tafAutoLabel">TAF auto-check off</span>
+    <button id="tafAutoBtn">Auto-check TAF (15 min)</button>
+  </div>
+  <div class="strip-label">TAF — issued 0500 / 1100 / 1700 / 2300 UTC only (source: Ogimet)</div>
+  <div class="strip empty" id="tafStrip">No TAF loaded yet — click "Fetch latest TAF".</div>
+  <div class="strip-meta" id="tafMeta">&nbsp;</div>
+
   <div class="banner" id="banner"></div>
 
   <div class="grid">
@@ -199,8 +210,28 @@
     </div>
   </div>
 
+  <div class="controls" style="margin-bottom:8px;">
+    <label>OBSERVATION HISTORY — last 24 hours, shared (stored server-side, survives this device being off)</label>
+    <span class="spacer"></span>
+    <span class="autorefresh" id="historyStatus">Not loaded yet</span>
+    <button id="refreshHistoryBtn">Refresh</button>
+  </div>
+  <div class="log" id="logHistory" style="max-height:360px;overflow-y:auto;">
+    <div class="log-item none">Loading…</div>
+  </div>
+  <div class="strip-meta" style="margin-bottom:20px;">This log is written by a scheduled Cloudflare Worker check, not by this page — it keeps recording even if no browser is open. This page just displays it, and also keeps its own local-only log of manually pasted checks below.</div>
+
+  <div class="controls" style="margin-bottom:8px;">
+    <label>MANUAL CHECKS — this device only (not shared)</label>
+    <span class="spacer"></span>
+    <button id="clearLogBtn">Clear local log</button>
+  </div>
+  <div class="log" id="localLogHistory" style="max-height:200px;overflow-y:auto;">
+    <div class="log-item none">No entries yet.</div>
+  </div>
+
   <footer>
-    Rules cover core ICAO Annex 3 / WMO No. 782 group formatting for METAR/SPECI. Trend and remark contents are not deep-validated. Default station VNKT (Tribhuvan Intl). Source: aviationweather.gov.
+    Rules cover core ICAO Annex 3 / WMO No. 782 group formatting for METAR/SPECI. Trend and remark contents are not deep-validated. Default station VNKT (Tribhuvan Intl). Source: aviationweather.gov. History is stored locally in this browser only — it is not shared between devices and clears if browser data is cleared.
   </footer>
 
 </div>
@@ -418,6 +449,74 @@ function compareToPrevious(icao, groups){
   return cautions;
 }
 
+/* ---------- 24-hour observation history (localStorage) ---------- */
+const LOG_KEY = 'metarqc_history_v1';
+const LOG_WINDOW_MS = 24*60*60*1000;
+
+function loadLog(){
+  try{
+    const raw = localStorage.getItem(LOG_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e){ return []; }
+}
+function pruneLog(log){
+  const cutoff = Date.now() - LOG_WINDOW_MS;
+  return log.filter(e => e.ts >= cutoff);
+}
+function saveLog(log){
+  try{ localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch(e){ /* storage unavailable — history just won't persist */ }
+}
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function renderLogInto(elId, log){
+  const el = document.getElementById(elId);
+  if(!log.length){ el.innerHTML = '<div class="log-item none">No entries in the last 24 hours.</div>'; return; }
+  const sorted = [...log].sort((a,b)=>b.ts-a.ts);
+  el.innerHTML = sorted.map(e=>{
+    const t = new Date(e.ts);
+    const hh = String(t.getUTCHours()).padStart(2,'0'), mm=String(t.getUTCMinutes()).padStart(2,'0');
+    const months=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    const dd = String(t.getUTCDate()).padStart(2,'0')+months[t.getUTCMonth()];
+    const cls = e.issues>0 ? 'warn' : 'none';
+    const issueTxt = e.issues>0 ? `${e.issues} issue(s) — ` : '';
+    return `<div class="log-item ${cls}"><b>${dd} ${hh}:${mm}Z</b> · ${e.type} · ${e.icao||'----'} — ${issueTxt}${escapeHtml(e.raw||'')}</div>`;
+  }).join('');
+}
+function addLogEntry(entry){
+  let log = pruneLog(loadLog());
+  log.push(Object.assign({ts:Date.now()}, entry));
+  log = pruneLog(log);
+  saveLog(log);
+  renderLogInto('localLogHistory', log);
+}
+document.getElementById('clearLogBtn').addEventListener('click', ()=>{
+  if(!confirm('Clear the local manual-check log on this browser?')) return;
+  saveLog([]);
+  renderLogInto('localLogHistory', []);
+});
+renderLogInto('localLogHistory', pruneLog(loadLog()));
+
+/* ---------- Server-side shared history (from the Cloudflare Worker's KV store) ---------- */
+async function loadServerHistory(){
+  const statusEl = document.getElementById('historyStatus');
+  if(!CUSTOM_PROXY){
+    renderLogInto('logHistory', []);
+    statusEl.textContent = 'No server history configured (CUSTOM_PROXY not set)';
+    return;
+  }
+  statusEl.textContent = 'Loading…';
+  try{
+    const res = await fetch(`${CUSTOM_PROXY}/history`);
+    if(!res.ok) throw new Error('status '+res.status);
+    const list = await res.json();
+    renderLogInto('logHistory', list);
+    statusEl.textContent = `Updated ${new Date().toUTCString().slice(17,25)}Z · ${list.length} entries`;
+  } catch(e){
+    statusEl.textContent = 'Could not load server history: '+e.message;
+  }
+}
+document.getElementById('refreshHistoryBtn').addEventListener('click', loadServerHistory);
+setInterval(loadServerHistory, 60000);
+
 /* ---------- Rendering ---------- */
 const CHECK_ROWS = [
   ['STATION/TIME', r=>[r.groups.station, r.groups.time].filter(Boolean).join(' '), r=>!r.groups.station || !r.groups.time],
@@ -489,7 +588,43 @@ function renderResult(result, sourceLabel){
 /* ---------- Fetching ---------- */
 // If you deploy your own Cloudflare Worker proxy (recommended — see setup notes),
 // paste its URL here, e.g. 'https://metar-proxy.yourname.workers.dev'
-const CUSTOM_PROXY = 'https://metar-qc.worksaviation76.workers.dev/';
+const CUSTOM_PROXY = 'https://metar-qc.worksaviation76.workers.dev';
+
+function proxyChain(){
+  const list = [];
+  if(CUSTOM_PROXY) list.push(u => `${CUSTOM_PROXY}?url=${encodeURIComponent(u)}`);
+  list.push(
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://r.jina.ai/${u}`
+  );
+  return list;
+}
+
+// Fetches a URL trying: direct, then each proxy in turn. extractFn(text) must
+// return a truthy result once the text is usable, or falsy to keep trying.
+async function fetchViaRoutes(url, extractFn){
+  try{
+    const res = await fetch(url);
+    if(res.ok){
+      const text = await res.text();
+      const result = extractFn(text);
+      if(result) return {result, via:'direct'};
+    }
+  } catch(e){ /* fall through to proxies */ }
+
+  for(const build of proxyChain()){
+    try{
+      const res = await fetch(build(url));
+      if(!res.ok) continue;
+      const text = await res.text();
+      const result = extractFn(text);
+      if(result) return {result, via:'proxy'};
+    } catch(e){ /* try next proxy */ }
+  }
+
+  throw new Error('ALL_ROUTES_FAILED');
+}
 
 function extractMetarLine(text){
   const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
@@ -498,36 +633,73 @@ function extractMetarLine(text){
 
 async function fetchStation(icao){
   const directUrl = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
-  const proxies = [];
-  if(CUSTOM_PROXY) proxies.push(u => `${CUSTOM_PROXY}?url=${encodeURIComponent(u)}`);
-  proxies.push(
-    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    u => `https://r.jina.ai/${u}`
-  );
+  const {result, via} = await fetchViaRoutes(directUrl, extractMetarLine);
+  return {line: result, via};
+}
 
-  // Try direct first
-  try{
-    const res = await fetch(directUrl);
-    if(res.ok){
-      const text = await res.text();
-      const line = extractMetarLine(text);
-      if(line) return {line, via:'direct'};
+/* ---------- TAF (via Ogimet — AWC does not carry VNKT/Nepal TAFs) ---------- */
+// TAF for VNKT is only issued at these UTC hours; used to sanity-check what we get back.
+const TAF_ISSUE_HOURS = ['05','11','17','23'];
+
+function pad(n){ return String(n).padStart(2,'0'); }
+
+function buildOgimetUrl(icao){
+  const now = new Date();
+  const start = new Date(now.getTime() - 30*60*60*1000); // 30h back — guarantees covering the last issuance
+  const p = d => ({y:d.getUTCFullYear(), mo:pad(d.getUTCMonth()+1), da:pad(d.getUTCDate()), h:pad(d.getUTCHours())});
+  const s = p(start), e = p(now);
+  return `https://ogimet.com/display_metars2.php?lugar=${icao.toLowerCase()}&tipo=ALL&ord=REV&nil=SI&fmt=html`
+    + `&ano=${s.y}&mes=${s.mo}&day=${s.da}&hora=${s.h}`
+    + `&anof=${e.y}&mesf=${e.mo}&dayf=${e.da}&horaf=${e.h}&minf=59&enviar=Ver`;
+}
+
+function extractLatestTaf(html, icao){
+  // Strip tags entirely and collapse to one continuous text stream — table/row
+  // layout varies and can't be relied on to keep report headers at line starts.
+  const text = html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const startRe = new RegExp(`TAF\\s+(?:AMD\\s+|COR\\s+)?${icao}\\s+\\d{6}Z`);
+  const m = startRe.exec(text);
+  if(!m) return null;
+
+  const afterHeader = text.slice(m.index + m[0].length);
+  const candidates = [];
+  const eq = afterHeader.indexOf('=');
+  if(eq !== -1) candidates.push(eq);
+  ['METAR','SPECI','TAF'].forEach(kw=>{
+    const idx = afterHeader.search(new RegExp(`\\b${kw}\\b`));
+    if(idx !== -1) candidates.push(idx);
+  });
+  const cut = candidates.length ? Math.min(...candidates) : afterHeader.length;
+
+  return (m[0] + afterHeader.slice(0, cut)).replace(/=$/,'').trim();
+}
+
+async function fetchTaf(icao){
+  const url = buildOgimetUrl(icao);
+  const {result, via} = await fetchViaRoutes(url, text => extractLatestTaf(text, icao));
+  return {taf: result, via};
+}
+
+function checkTafFormat(taf, icao){
+  const warnings = [];
+  const headerMatch = taf.match(new RegExp(`^TAF\\s+(AMD\\s+|COR\\s+)?${icao}\\s+(\\d{2})(\\d{2})\\d{2}Z`));
+  if(!headerMatch){
+    warnings.push('TAF header does not match expected format (TAF ICAO DDHHMMZ).');
+  } else {
+    const issueHour = headerMatch[3];
+    if(!TAF_ISSUE_HOURS.includes(issueHour)){
+      warnings.push(`TAF issue time (${issueHour}Z) is outside the standard issuance hours for this station (05/11/17/23Z) — may be a delayed or amended bulletin.`);
     }
-  } catch(e){ /* fall through to proxies */ }
-
-  // Try each proxy in turn
-  for(const build of proxies){
-    try{
-      const res = await fetch(build(directUrl));
-      if(!res.ok) continue;
-      const text = await res.text();
-      const line = extractMetarLine(text);
-      if(line && /^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(line)) return {line, via:'proxy'};
-    } catch(e){ /* try next proxy */ }
   }
-
-  throw new Error('ALL_ROUTES_FAILED');
+  if(!/\d{4}\/\d{4}/.test(taf)){
+    warnings.push('No validity period (DDHH/DDHH) found in the TAF.');
+  }
+  return warnings;
 }
 
 async function doFetch(){
@@ -565,7 +737,73 @@ document.getElementById('manualBtn').addEventListener('click', ()=>{
   if(!raw.trim()){ alert('Paste a METAR to check.'); return; }
   const result = parseMetar(raw);
   renderResult(result, 'Manually entered observation');
+  addLogEntry({type:'MANUAL', icao: result.groups.station || '----', raw: result.clean, issues: result.errors.length + result.warnings.length});
 });
+
+/* ---------- TAF fetch + render ---------- */
+async function doFetchTaf(){
+  const icao = document.getElementById('icaoInput').value.trim().toUpperCase();
+  if(!/^[A-Z]{4}$/.test(icao)){ alert('Enter a valid 4-letter ICAO station code.'); return; }
+  const btn = document.getElementById('tafFetchBtn');
+  btn.textContent='Fetching TAF…'; btn.disabled=true;
+  const stripEl = document.getElementById('tafStrip');
+  const metaEl = document.getElementById('tafMeta');
+  try{
+    const {taf, via} = await fetchTaf(icao);
+    if(!taf){
+      stripEl.textContent = `No TAF found for ${icao} in the last 30 hours.`;
+      stripEl.classList.add('empty');
+      metaEl.textContent = 'Source: Ogimet';
+      return;
+    }
+    stripEl.textContent = taf;
+    stripEl.classList.remove('empty');
+    const warnings = checkTafFormat(taf, icao);
+    const viaLabel = via==='proxy' ? 'via backup proxy' : 'direct';
+    metaEl.textContent = `Source: Ogimet · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`;
+    const log = document.getElementById('logList');
+    if(warnings.length){
+      warnings.forEach(w=>{
+        const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
+      });
+      if(armed) startSiren();
+    }
+  } catch(err){
+    stripEl.textContent = `Could not fetch TAF: ${err.message==='ALL_ROUTES_FAILED' ? 'all routes (direct + proxies) failed.' : err.message}`;
+    stripEl.classList.add('empty');
+    metaEl.textContent = '';
+  } finally {
+    btn.textContent='Fetch latest TAF'; btn.disabled=false;
+  }
+}
+document.getElementById('tafFetchBtn').addEventListener('click', doFetchTaf);
+
+let tafAutoTimer=null, tafAutoOn=false, tafCountdown=0;
+const TAF_CHECK_INTERVAL = 900; // 15 min — TAF only changes 4x/day, no need to poll harder
+function updateTafLabel(){
+  document.getElementById('tafAutoLabel').textContent = tafAutoOn
+    ? `Next TAF check in ${Math.floor(tafCountdown/60)}m ${tafCountdown%60}s`
+    : 'TAF auto-check off';
+}
+function setTafAuto(on){
+  tafAutoOn = on;
+  const btn = document.getElementById('tafAutoBtn');
+  if(tafAutoTimer) clearInterval(tafAutoTimer);
+  if(tafAutoOn){
+    btn.textContent='Stop TAF auto-check';
+    tafCountdown = TAF_CHECK_INTERVAL;
+    updateTafLabel();
+    tafAutoTimer = setInterval(()=>{
+      tafCountdown--;
+      if(tafCountdown<=0){ doFetchTaf(); tafCountdown=TAF_CHECK_INTERVAL; }
+      updateTafLabel();
+    },1000);
+  } else {
+    btn.textContent='Auto-check TAF (15 min)';
+    updateTafLabel();
+  }
+}
+document.getElementById('tafAutoBtn').addEventListener('click', ()=> setTafAuto(!tafAutoOn));
 
 /* ---------- Auto refresh ---------- */
 let autoTimer=null, autoOn=false, countdown=0;
@@ -597,6 +835,9 @@ document.getElementById('autoBtn').addEventListener('click', ()=> setAuto(!autoO
 /* Initial load — auto-refresh is on by default */
 doFetch();
 setAuto(true);
+doFetchTaf();
+setTafAuto(true);
+loadServerHistory();
 </script>
 </body>
 </html>
