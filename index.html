@@ -195,11 +195,19 @@
   <div class="strip empty" id="tafStrip">No TAF loaded yet — click "Fetch latest TAF".</div>
   <div class="strip-meta" id="tafMeta">&nbsp;</div>
 
+  <div class="manual">
+    <div class="strip-label">MANUAL TAF CHECK</div>
+    <div class="manual-row">
+      <textarea id="tafManualInput" placeholder="Paste a raw TAF here, in the same format Ogimet returns it, e.g. TAF VNKT 172300Z 1800/1824 VRB02KT 6000 FEW010 SCT030 BKN100 BECMG 1804/1805 20004KT 7000 FEW015 SCT030"></textarea>
+      <button id="tafManualBtn">Check pasted TAF</button>
+    </div>
+  </div>
+
   <div class="banner" id="banner"></div>
 
   <div class="grid">
     <div>
-      <div class="panel-title">DECODED GROUPS</div>
+      <div class="panel-title">DECODED GROUPS — METAR</div>
       <div id="checklist"></div>
     </div>
     <div>
@@ -210,16 +218,23 @@
     </div>
   </div>
 
+  <div class="panel-title" style="margin-top:20px;">DECODED GROUPS — TAF</div>
+  <div id="tafChecklist"><div class="check-row"><div class="check-name">—</div><div class="check-val">No TAF checked yet.</div><div></div></div></div>
+
   <div class="controls" style="margin-bottom:8px;">
     <label>OBSERVATION HISTORY — last 24 hours, shared (stored server-side, survives this device being off)</label>
     <span class="spacer"></span>
     <span class="autorefresh" id="historyStatus">Not loaded yet</span>
     <button id="refreshHistoryBtn">Refresh</button>
   </div>
+  <div class="controls" style="margin-bottom:0;border-bottom:none;padding-bottom:0;">
+    <button class="primary" id="histTabMetar">METAR</button>
+    <button id="histTabTaf">TAF</button>
+  </div>
   <div class="log" id="logHistory" style="max-height:360px;overflow-y:auto;">
     <div class="log-item none">Loading…</div>
   </div>
-  <div class="strip-meta" style="margin-bottom:20px;">This log is written by a scheduled Cloudflare Worker check, not by this page — it keeps recording even if no browser is open. This page just displays it, and also keeps its own local-only log of manually pasted checks below.</div>
+  <div class="strip-meta" style="margin-bottom:20px;">This log is written by a scheduled Cloudflare Worker check, not by this page — it keeps recording even if no browser is open. It only stores a new entry when the observation actually changes, not on every poll. This page also keeps its own local-only log of manually pasted checks below.</div>
 
   <div class="controls" style="margin-bottom:8px;">
     <label>MANUAL CHECKS — this device only (not shared)</label>
@@ -496,6 +511,14 @@ document.getElementById('clearLogBtn').addEventListener('click', ()=>{
 renderLogInto('localLogHistory', pruneLog(loadLog()));
 
 /* ---------- Server-side shared history (from the Cloudflare Worker's KV store) ---------- */
+let serverHistoryCache = [];
+let historyTab = 'METAR';
+
+function renderHistoryTab(){
+  const filtered = serverHistoryCache.filter(e => e.type === historyTab);
+  renderLogInto('logHistory', filtered);
+}
+
 async function loadServerHistory(){
   const statusEl = document.getElementById('historyStatus');
   if(!CUSTOM_PROXY){
@@ -507,15 +530,24 @@ async function loadServerHistory(){
   try{
     const res = await fetch(`${CUSTOM_PROXY}/history`);
     if(!res.ok) throw new Error('status '+res.status);
-    const list = await res.json();
-    renderLogInto('logHistory', list);
-    statusEl.textContent = `Updated ${new Date().toUTCString().slice(17,25)}Z · ${list.length} entries`;
+    serverHistoryCache = await res.json();
+    renderHistoryTab();
+    statusEl.textContent = `Updated ${new Date().toUTCString().slice(17,25)}Z · ${serverHistoryCache.length} entries total`;
   } catch(e){
     statusEl.textContent = 'Could not load server history: '+e.message;
   }
 }
 document.getElementById('refreshHistoryBtn').addEventListener('click', loadServerHistory);
 setInterval(loadServerHistory, 60000);
+
+function setHistoryTab(tab){
+  historyTab = tab;
+  document.getElementById('histTabMetar').className = tab==='METAR' ? 'primary' : '';
+  document.getElementById('histTabTaf').className = tab==='TAF' ? 'primary' : '';
+  renderHistoryTab();
+}
+document.getElementById('histTabMetar').addEventListener('click', ()=>setHistoryTab('METAR'));
+document.getElementById('histTabTaf').addEventListener('click', ()=>setHistoryTab('TAF'));
 
 /* ---------- Rendering ---------- */
 const CHECK_ROWS = [
@@ -588,7 +620,7 @@ function renderResult(result, sourceLabel){
 /* ---------- Fetching ---------- */
 // If you deploy your own Cloudflare Worker proxy (recommended — see setup notes),
 // paste its URL here, e.g. 'https://metar-proxy.yourname.workers.dev'
-const CUSTOM_PROXY = 'https://metar-qc.worksaviation76.workers.dev';
+const CUSTOM_PROXY = 'https://metar-proxy.nepali-ddhakal.workers.dev';
 
 function proxyChain(){
   const list = [];
@@ -702,6 +734,74 @@ function checkTafFormat(taf, icao){
   return warnings;
 }
 
+/* ---------- TAF group decoder (for the DECODED GROUPS display) ---------- */
+const CHANGE_KW_RE = /^(BECMG|TEMPO|FM\d{6}|PROB\d{2})$/;
+
+function parseTafConditions(tokens, start){
+  // Consume wind/visibility/weather/cloud groups (same shapes as METAR) until the
+  // next change-group keyword or end of tokens. Returns {cond, next index}.
+  let i = start;
+  const next=()=>tokens[i];
+  const cond = {};
+  if(WIND_RE.test(next()||'')) cond.wind = tokens[i++];
+  if(next()==='CAVOK' || VIS4_RE.test(next()||'') || VISSM_RE.test(next()||'')) cond.visibility = tokens[i++];
+  const wx=[];
+  while(WX_RE.test(next()||'') && !CHANGE_KW_RE.test(next()||'') && wx.length<4) wx.push(tokens[i++]);
+  if(wx.length) cond.weather = wx.join(' ');
+  const cloud=[];
+  if(/^(NSC|SKC)$/.test(next()||'')) cloud.push(tokens[i++]);
+  else while((CLOUD_RE.test(next()||'') || VV_RE.test(next()||'')) ) cloud.push(tokens[i++]);
+  if(cloud.length) cond.cloud = cloud.join(' ');
+  return {cond, next:i};
+}
+
+function parseTaf(raw, icao){
+  const errors=[], warnings=[];
+  const clean = raw.trim().toUpperCase().replace(/\s+/g,' ');
+  const tokens = clean.split(' ');
+  let i=0;
+  const next=()=>tokens[i];
+  const result = { header:null, validity:null, base:{}, changes:[] };
+
+  if(next()==='TAF') i++;
+  if(/^(AMD|COR)$/.test(next()||'')) { result.modifier = tokens[i++]; }
+  if(/^[A-Z]{4}$/.test(next()||'')) { result.station = tokens[i++]; } else { errors.push('Missing or invalid ICAO station identifier.'); }
+  if(/^\d{6}Z$/.test(next()||'')) { result.issueTime = tokens[i++]; } else { errors.push('Missing or invalid issue time (expected DDHHMMZ).'); }
+  if(/^\d{4}\/\d{4}$/.test(next()||'')) { result.validity = tokens[i++]; } else { errors.push('Missing or invalid validity period (expected DDHH/DDHH).'); }
+
+  const {cond, next:afterBase} = parseTafConditions(tokens, i);
+  result.base = cond;
+  i = afterBase;
+  if(!cond.wind) warnings.push('No base wind group found in the TAF.');
+  if(!cond.visibility) warnings.push('No base visibility group found in the TAF.');
+
+  while(i < tokens.length && CHANGE_KW_RE.test(tokens[i])){
+    const kw = tokens[i++];
+    let sub = {};
+    let periodMatch = null;
+    if(/^FM\d{6}$/.test(kw)){
+      sub.type = 'FM'; sub.time = kw.slice(2);
+    } else if(/^PROB\d{2}$/.test(kw)){
+      sub.type = kw;
+      if(next()==='TEMPO'){ i++; sub.tempo = true; }
+      if(/^\d{4}\/\d{4}$/.test(next()||'')) sub.period = tokens[i++];
+    } else {
+      sub.type = kw;
+      if(/^\d{4}\/\d{4}$/.test(next()||'')) sub.period = tokens[i++];
+      else warnings.push(`${kw} group missing its DDHH/DDHH validity sub-period.`);
+    }
+    const {cond:c2, next:afterCond} = parseTafConditions(tokens, i);
+    sub.cond = c2;
+    i = afterCond;
+    result.changes.push(sub);
+  }
+
+  if(i < tokens.length) result.extra = tokens.slice(i).join(' ');
+
+  return {errors, warnings, ...result, clean};
+}
+
+
 async function doFetch(){
   const icao = document.getElementById('icaoInput').value.trim().toUpperCase();
   if(!/^[A-Z]{4}$/.test(icao)){ alert('Enter a valid 4-letter ICAO station code.'); return; }
@@ -741,6 +841,35 @@ document.getElementById('manualBtn').addEventListener('click', ()=>{
 });
 
 /* ---------- TAF fetch + render ---------- */
+function renderTafChecklist(taf, icao){
+  const parsed = parseTaf(taf, icao);
+  const el = document.getElementById('tafChecklist');
+  const rows = [];
+  rows.push(['HEADER', [parsed.modifier, parsed.station, parsed.issueTime].filter(Boolean).join(' ') || '—', !parsed.station || !parsed.issueTime]);
+  rows.push(['VALIDITY', parsed.validity || '—', !parsed.validity]);
+  rows.push(['BASE WIND', parsed.base.wind || '—', !parsed.base.wind]);
+  rows.push(['BASE VISIBILITY', parsed.base.visibility || '—', !parsed.base.visibility]);
+  rows.push(['BASE WEATHER', parsed.base.weather || '—', false]);
+  rows.push(['BASE CLOUD', parsed.base.cloud || '—', false]);
+  parsed.changes.forEach((c,idx)=>{
+    const parts = [c.type];
+    if(c.tempo) parts.push('TEMPO');
+    if(c.period) parts.push(c.period);
+    if(c.time) parts.push(c.time);
+    ['wind','visibility','weather','cloud'].forEach(k=>{ if(c.cond[k]) parts.push(c.cond[k]); });
+    rows.push([`CHANGE ${idx+1}`, parts.join(' '), false]);
+  });
+  if(parsed.extra) rows.push(['SUPPL. TEXT', parsed.extra, false]);
+
+  el.innerHTML = rows.map(([name,val,bad])=>`<div class="check-row">
+      <div class="check-name">${name}</div>
+      <div class="check-val">${val}</div>
+      <div class="mark ${bad?'err':'ok'}">${bad?'✕':'✓'}</div>
+    </div>`).join('');
+
+  return parsed;
+}
+
 async function doFetchTaf(){
   const icao = document.getElementById('icaoInput').value.trim().toUpperCase();
   if(!/^[A-Z]{4}$/.test(icao)){ alert('Enter a valid 4-letter ICAO station code.'); return; }
@@ -759,6 +888,7 @@ async function doFetchTaf(){
     stripEl.textContent = taf;
     stripEl.classList.remove('empty');
     const warnings = checkTafFormat(taf, icao);
+    renderTafChecklist(taf, icao);
     const viaLabel = via==='proxy' ? 'via backup proxy' : 'direct';
     metaEl.textContent = `Source: Ogimet · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`;
     const log = document.getElementById('logList');
@@ -777,6 +907,25 @@ async function doFetchTaf(){
   }
 }
 document.getElementById('tafFetchBtn').addEventListener('click', doFetchTaf);
+
+document.getElementById('tafManualBtn').addEventListener('click', ()=>{
+  const raw = document.getElementById('tafManualInput').value;
+  if(!raw.trim()){ alert('Paste a TAF to check.'); return; }
+  const icao = document.getElementById('icaoInput').value.trim().toUpperCase() || 'VNKT';
+  const stripEl = document.getElementById('tafStrip');
+  const metaEl = document.getElementById('tafMeta');
+  stripEl.textContent = raw.trim().toUpperCase().replace(/\s+/g,' ');
+  stripEl.classList.remove('empty');
+  metaEl.textContent = 'Manually entered TAF';
+  const warnings = checkTafFormat(stripEl.textContent, icao);
+  renderTafChecklist(stripEl.textContent, icao);
+  const log = document.getElementById('logList');
+  if(warnings.length){
+    warnings.forEach(w=>{
+      const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
+    });
+  }
+});
 
 let tafAutoTimer=null, tafAutoOn=false, tafCountdown=0;
 const TAF_CHECK_INTERVAL = 900; // 15 min — TAF only changes 4x/day, no need to poll harder
