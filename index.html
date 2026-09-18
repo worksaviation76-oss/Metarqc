@@ -165,88 +165,121 @@
   <div class="controls">
     <label for="icaoInput">Station</label>
     <input type="text" id="icaoInput" value="VNKT" maxlength="4" style="text-transform:uppercase">
-    <button class="primary" id="fetchBtn">Fetch latest</button>
     <span class="spacer"></span>
-    <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
-    <button id="autoBtn">Auto-refresh 2 min</button>
     <button id="sirenBtn">Arm audio alert</button>
   </div>
 
-  <div class="strip-label">RAW OBSERVATION</div>
-  <div class="strip empty" id="rawStrip">No observation loaded yet — fetch a station or paste a METAR below.</div>
-  <div class="strip-meta" id="stripMeta">&nbsp;</div>
-
-  <div class="manual">
-    <div class="strip-label">MANUAL CHECK</div>
-    <div class="manual-row">
-      <textarea id="manualInput" placeholder="Paste a raw METAR/SPECI here, e.g. VNKT 171200Z 09006KT 6000 HZ SCT025 28/21 Q1006 NOSIG"></textarea>
-      <button id="manualBtn">Check pasted METAR</button>
-    </div>
+  <div class="controls" style="margin-bottom:0;">
+    <button class="primary" id="mainTabMetar" style="font-size:14px;padding:11px 24px;">METAR</button>
+    <button id="mainTabTaf" style="font-size:14px;padding:11px 24px;">TAF</button>
   </div>
 
-  <div class="controls" style="margin-top:0;">
-    <label>TAF</label>
-    <button class="primary" id="tafFetchBtn">Fetch latest TAF</button>
-    <span class="spacer"></span>
-    <span class="autorefresh" id="tafAutoLabel">TAF auto-check off</span>
-    <button id="tafAutoBtn">Auto-check TAF (15 min)</button>
-  </div>
-  <div class="strip-label">TAF — issued 0500 / 1100 / 1700 / 2300 UTC only (source: Ogimet)</div>
-  <div class="strip empty" id="tafStrip">No TAF loaded yet — click "Fetch latest TAF".</div>
-  <div class="strip-meta" id="tafMeta">&nbsp;</div>
+  <div id="metarPanel">
 
-  <div class="manual">
-    <div class="strip-label">MANUAL TAF CHECK</div>
-    <div class="manual-row">
-      <textarea id="tafManualInput" placeholder="Paste a raw TAF here, in the same format Ogimet returns it, e.g. TAF VNKT 172300Z 1800/1824 VRB02KT 6000 FEW010 SCT030 BKN100 BECMG 1804/1805 20004KT 7000 FEW015 SCT030"></textarea>
-      <button id="tafManualBtn">Check pasted TAF</button>
+    <div class="controls" style="margin-top:0;">
+      <button class="primary" id="fetchBtn">Fetch latest</button>
+      <span class="spacer"></span>
+      <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
+      <button id="autoBtn">Auto-refresh 2 min</button>
     </div>
-  </div>
 
-  <div class="banner" id="banner"></div>
+    <div class="strip-label">RAW OBSERVATION</div>
+    <div class="strip empty" id="rawStrip">No observation loaded yet — fetch a station or paste a METAR below.</div>
+    <div class="strip-meta" id="stripMeta">&nbsp;</div>
 
-  <div class="grid">
-    <div>
-      <div class="panel-title">DECODED GROUPS — METAR</div>
-      <div id="checklist"></div>
-    </div>
-    <div>
-      <div class="sidepanel">
-        <div class="panel-title" style="border:none;padding:0;margin:0 0 10px;">ALERT LOG</div>
-        <div class="log" id="logList"><div class="log-item none">No observation checked yet.</div></div>
+    <div class="manual">
+      <div class="strip-label">MANUAL CHECK</div>
+      <div class="manual-row">
+        <textarea id="manualInput" placeholder="Paste a raw METAR/SPECI here, e.g. VNKT 171200Z 09006KT 6000 HZ SCT025 28/21 Q1006 NOSIG"></textarea>
+        <button id="manualBtn">Check pasted METAR</button>
       </div>
     </div>
+
+    <div class="banner" id="banner"></div>
+
+    <div class="grid">
+      <div>
+        <div class="panel-title">DECODED GROUPS</div>
+        <div id="checklist"></div>
+      </div>
+      <div>
+        <div class="sidepanel">
+          <div class="panel-title" style="border:none;padding:0;margin:0 0 10px;">ALERT LOG</div>
+          <div class="log" id="logList"><div class="log-item none">No observation checked yet.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-bottom:8px;margin-top:20px;">
+      <label>METAR HISTORY — last 24 hours, shared (stored server-side, survives this device being off)</label>
+      <span class="spacer"></span>
+      <span class="autorefresh" id="historyStatus">Not loaded yet</span>
+      <button id="refreshHistoryBtn">Refresh</button>
+    </div>
+    <div class="log" id="logHistory" style="max-height:360px;overflow-y:auto;">
+      <div class="log-item none">Loading…</div>
+    </div>
+    <div class="strip-meta" style="margin-bottom:20px;">Written by a scheduled Cloudflare Worker check, not by this page — it keeps recording even if no browser is open, and only stores an entry when the observation actually changes.</div>
+
+    <div class="controls" style="margin-bottom:8px;">
+      <label>MANUAL CHECKS — this device only (not shared)</label>
+      <span class="spacer"></span>
+      <button id="clearLogBtn">Clear local log</button>
+    </div>
+    <div class="log" id="localLogHistory" style="max-height:200px;overflow-y:auto;">
+      <div class="log-item none">No entries yet.</div>
+    </div>
+
   </div>
 
-  <div class="panel-title" style="margin-top:20px;">DECODED GROUPS — TAF</div>
-  <div id="tafChecklist"><div class="check-row"><div class="check-name">—</div><div class="check-val">No TAF checked yet.</div><div></div></div></div>
+  <div id="tafPanel" style="display:none;">
 
-  <div class="controls" style="margin-bottom:8px;">
-    <label>OBSERVATION HISTORY — last 24 hours, shared (stored server-side, survives this device being off)</label>
-    <span class="spacer"></span>
-    <span class="autorefresh" id="historyStatus">Not loaded yet</span>
-    <button id="refreshHistoryBtn">Refresh</button>
-  </div>
-  <div class="controls" style="margin-bottom:0;border-bottom:none;padding-bottom:0;">
-    <button class="primary" id="histTabMetar">METAR</button>
-    <button id="histTabTaf">TAF</button>
-  </div>
-  <div class="log" id="logHistory" style="max-height:360px;overflow-y:auto;">
-    <div class="log-item none">Loading…</div>
-  </div>
-  <div class="strip-meta" style="margin-bottom:20px;">This log is written by a scheduled Cloudflare Worker check, not by this page — it keeps recording even if no browser is open. It only stores a new entry when the observation actually changes, not on every poll. This page also keeps its own local-only log of manually pasted checks below.</div>
+    <div class="controls" style="margin-top:0;">
+      <button class="primary" id="tafFetchBtn">Fetch latest TAF</button>
+      <span class="spacer"></span>
+      <span class="autorefresh" id="tafAutoLabel">TAF auto-check off</span>
+      <button id="tafAutoBtn">Auto-check TAF (15 min)</button>
+    </div>
 
-  <div class="controls" style="margin-bottom:8px;">
-    <label>MANUAL CHECKS — this device only (not shared)</label>
-    <span class="spacer"></span>
-    <button id="clearLogBtn">Clear local log</button>
-  </div>
-  <div class="log" id="localLogHistory" style="max-height:200px;overflow-y:auto;">
-    <div class="log-item none">No entries yet.</div>
+    <div class="strip-label">TAF — issued 0500 / 1100 / 1700 / 2300 UTC only (source: Ogimet)</div>
+    <div class="strip empty" id="tafStrip">No TAF loaded yet — click "Fetch latest TAF".</div>
+    <div class="strip-meta" id="tafMeta">&nbsp;</div>
+
+    <div class="manual">
+      <div class="strip-label">MANUAL TAF CHECK</div>
+      <div class="manual-row">
+        <textarea id="tafManualInput" placeholder="Paste a raw TAF here, in the same format Ogimet returns it, e.g. TAF VNKT 172300Z 1800/1824 VRB02KT 6000 FEW010 SCT030 BKN100 BECMG 1804/1805 20004KT 7000 FEW015 SCT030"></textarea>
+        <button id="tafManualBtn">Check pasted TAF</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="panel-title">DECODED GROUPS — TAF</div>
+        <div id="tafChecklist"><div class="check-row"><div class="check-name">—</div><div class="check-val">No TAF checked yet.</div><div></div></div></div>
+      </div>
+      <div>
+        <div class="sidepanel">
+          <div class="panel-title" style="border:none;padding:0;margin:0 0 10px;">TAF ALERT LOG</div>
+          <div class="log" id="tafLogList"><div class="log-item none">No TAF checked yet.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-bottom:8px;margin-top:20px;">
+      <label>TAF HISTORY — last 24 hours, shared (stored server-side, survives this device being off)</label>
+      <span class="spacer"></span>
+      <span class="autorefresh" id="tafHistoryStatus">Not loaded yet</span>
+      <button id="refreshTafHistoryBtn">Refresh</button>
+    </div>
+    <div class="log" id="tafLogHistory" style="max-height:360px;overflow-y:auto;">
+      <div class="log-item none">Loading…</div>
+    </div>
+
   </div>
 
   <footer>
-    Rules cover core ICAO Annex 3 / WMO No. 782 group formatting for METAR/SPECI. Trend and remark contents are not deep-validated. Default station VNKT (Tribhuvan Intl). Source: aviationweather.gov. History is stored locally in this browser only — it is not shared between devices and clears if browser data is cleared.
+    Rules cover core ICAO Annex 3 / WMO No. 782 group formatting for METAR/SPECI/TAF. Trend and remark contents are not deep-validated. Default station VNKT (Tribhuvan Intl). METAR source: aviationweather.gov. TAF source: Ogimet. History is stored server-side and survives this device being off; manual-check log is local to this browser only.
   </footer>
 
 </div>
@@ -511,43 +544,47 @@ document.getElementById('clearLogBtn').addEventListener('click', ()=>{
 renderLogInto('localLogHistory', pruneLog(loadLog()));
 
 /* ---------- Server-side shared history (from the Cloudflare Worker's KV store) ---------- */
-let serverHistoryCache = [];
-let historyTab = 'METAR';
-
-function renderHistoryTab(){
-  const filtered = serverHistoryCache.filter(e => e.type === historyTab);
-  renderLogInto('logHistory', filtered);
-}
-
 async function loadServerHistory(){
   const statusEl = document.getElementById('historyStatus');
+  const tafStatusEl = document.getElementById('tafHistoryStatus');
   if(!CUSTOM_PROXY){
     renderLogInto('logHistory', []);
+    renderLogInto('tafLogHistory', []);
     statusEl.textContent = 'No server history configured (CUSTOM_PROXY not set)';
+    tafStatusEl.textContent = 'No server history configured';
     return;
   }
   statusEl.textContent = 'Loading…';
+  tafStatusEl.textContent = 'Loading…';
   try{
     const res = await fetch(`${CUSTOM_PROXY}/history`);
     if(!res.ok) throw new Error('status '+res.status);
-    serverHistoryCache = await res.json();
-    renderHistoryTab();
-    statusEl.textContent = `Updated ${new Date().toUTCString().slice(17,25)}Z · ${serverHistoryCache.length} entries total`;
+    const all = await res.json();
+    const metarList = all.filter(e=>e.type==='METAR');
+    const tafList = all.filter(e=>e.type==='TAF');
+    renderLogInto('logHistory', metarList);
+    renderLogInto('tafLogHistory', tafList);
+    const stamp = new Date().toUTCString().slice(17,25)+'Z';
+    statusEl.textContent = `Updated ${stamp} · ${metarList.length} entries`;
+    tafStatusEl.textContent = `Updated ${stamp} · ${tafList.length} entries`;
   } catch(e){
     statusEl.textContent = 'Could not load server history: '+e.message;
+    tafStatusEl.textContent = 'Could not load server history: '+e.message;
   }
 }
 document.getElementById('refreshHistoryBtn').addEventListener('click', loadServerHistory);
+document.getElementById('refreshTafHistoryBtn').addEventListener('click', loadServerHistory);
 setInterval(loadServerHistory, 60000);
 
-function setHistoryTab(tab){
-  historyTab = tab;
-  document.getElementById('histTabMetar').className = tab==='METAR' ? 'primary' : '';
-  document.getElementById('histTabTaf').className = tab==='TAF' ? 'primary' : '';
-  renderHistoryTab();
+function setMainTab(tab){
+  document.getElementById('metarPanel').style.display = tab==='METAR' ? '' : 'none';
+  document.getElementById('tafPanel').style.display = tab==='TAF' ? '' : 'none';
+  document.getElementById('mainTabMetar').className = tab==='METAR' ? 'primary' : '';
+  document.getElementById('mainTabTaf').className = tab==='TAF' ? 'primary' : '';
 }
-document.getElementById('histTabMetar').addEventListener('click', ()=>setHistoryTab('METAR'));
-document.getElementById('histTabTaf').addEventListener('click', ()=>setHistoryTab('TAF'));
+document.getElementById('mainTabMetar').addEventListener('click', ()=>setMainTab('METAR'));
+document.getElementById('mainTabTaf').addEventListener('click', ()=>setMainTab('TAF'));
+setMainTab('METAR');
 
 /* ---------- Rendering ---------- */
 const CHECK_ROWS = [
@@ -891,12 +928,15 @@ async function doFetchTaf(){
     renderTafChecklist(taf, icao);
     const viaLabel = via==='proxy' ? 'via backup proxy' : 'direct';
     metaEl.textContent = `Source: Ogimet · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`;
-    const log = document.getElementById('logList');
+    const log = document.getElementById('tafLogList');
+    log.innerHTML='';
     if(warnings.length){
       warnings.forEach(w=>{
         const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
       });
       if(armed) startSiren();
+    } else {
+      log.innerHTML = '<div class="log-item none">No coding errors or significant weather flagged.</div>';
     }
   } catch(err){
     stripEl.textContent = `Could not fetch TAF: ${err.message==='ALL_ROUTES_FAILED' ? 'all routes (direct + proxies) failed.' : err.message}`;
@@ -919,11 +959,14 @@ document.getElementById('tafManualBtn').addEventListener('click', ()=>{
   metaEl.textContent = 'Manually entered TAF';
   const warnings = checkTafFormat(stripEl.textContent, icao);
   renderTafChecklist(stripEl.textContent, icao);
-  const log = document.getElementById('logList');
+  const log = document.getElementById('tafLogList');
+  log.innerHTML='';
   if(warnings.length){
     warnings.forEach(w=>{
       const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
     });
+  } else {
+    log.innerHTML = '<div class="log-item none">No coding errors or significant weather flagged.</div>';
   }
 });
 
