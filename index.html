@@ -166,7 +166,6 @@
     <label for="icaoInput">Station</label>
     <input type="text" id="icaoInput" value="VNKT" maxlength="4" style="text-transform:uppercase">
     <span class="spacer"></span>
-    <button id="sirenBtn">Arm audio alert</button>
   </div>
 
   <div class="controls" style="margin-bottom:0;">
@@ -181,6 +180,7 @@
       <span class="spacer"></span>
       <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
       <button id="autoBtn">Auto-refresh 2 min</button>
+      <button id="metarSirenBtn" data-armed-label="METAR alert armed — click to mute" data-idle-label="Arm METAR alert">Arm METAR alert</button>
     </div>
 
     <div class="strip-label">RAW OBSERVATION</div>
@@ -239,6 +239,7 @@
       <span class="spacer"></span>
       <span class="autorefresh" id="tafAutoLabel">TAF auto-check off</span>
       <button id="tafAutoBtn">Auto-check TAF (15 min)</button>
+      <button id="tafSirenBtn" data-armed-label="TAF alert armed — click to mute" data-idle-label="Arm TAF alert">Arm TAF alert</button>
     </div>
 
     <div class="strip-label">TAF — issued 0500 / 1100 / 1700 / 2300 UTC only (source: Ogimet)</div>
@@ -298,8 +299,10 @@ function tickClock(){
 }
 setInterval(tickClock,1000); tickClock();
 
-/* ---------- Siren (Web Audio) ---------- */
-let audioCtx=null, sirenOn=false, sirenTimer=null, armed=false;
+/* ---------- Siren (Web Audio) — independent METAR/TAF arming ---------- */
+let audioCtx=null, sirenOn=false, sirenTimer=null;
+let metarArmed=false, tafArmed=false;
+let metarHasIssue=false, tafHasIssue=false;
 function ensureCtx(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
 function sirenPulse(){
   ensureCtx();
@@ -318,19 +321,33 @@ function sirenPulse(){
 function startSiren(){ if(sirenOn) return; sirenOn=true; sirenPulse(); sirenTimer=setInterval(sirenPulse,900); }
 function stopSiren(){ sirenOn=false; if(sirenTimer) clearInterval(sirenTimer); sirenTimer=null; }
 
-document.getElementById('sirenBtn').addEventListener('click', ()=>{
-  armed = !armed;
-  const btn = document.getElementById('sirenBtn');
-  if(armed){
-    ensureCtx();
-    btn.textContent='Audio alert armed — click to mute';
-    btn.classList.add('armed');
-  } else {
-    btn.textContent='Arm audio alert';
-    btn.classList.remove('armed');
-    stopSiren();
-  }
-});
+// Recomputes whether the siren should be sounding, based on both types' current
+// armed + issue state combined — so muting one type never silences the other's
+// active alert, and unmuting a type with an already-active issue starts it right away.
+function updateSirenState(){
+  const shouldSound = (metarArmed && metarHasIssue) || (tafArmed && tafHasIssue);
+  if(shouldSound) startSiren(); else stopSiren();
+}
+
+function wireArmButton(btnId, getArmed, setArmed){
+  document.getElementById(btnId).addEventListener('click', ()=>{
+    const next = !getArmed();
+    setArmed(next);
+    const btn = document.getElementById(btnId);
+    if(next){
+      ensureCtx();
+      btn.textContent = btn.dataset.armedLabel;
+      btn.classList.add('armed');
+    } else {
+      btn.textContent = btn.dataset.idleLabel;
+      btn.classList.remove('armed');
+    }
+    updateSirenState();
+  });
+}
+wireArmButton('metarSirenBtn', ()=>metarArmed, v=>{metarArmed=v;});
+wireArmButton('tafSirenBtn', ()=>tafArmed, v=>{tafArmed=v;});
+
 
 /* ---------- METAR PARSER ---------- */
 const WX_PHENOM = 'DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS';
@@ -462,6 +479,28 @@ function parseMetar(raw){
 /* ---------- Observation-to-observation comparison (catch implausible jumps) ---------- */
 const lastByStation = {};
 const TEMP_JUMP_THRESHOLD = 5;   // °C between consecutive obs
+const MISSED_OBS_THRESHOLD_MIN = 32; // VNKT reports every 30 min — alarm within ~2 min of that mark
+
+function ddhhmmToTimestamp(ddhhmm, refNow){
+  const dd = parseInt(ddhhmm.slice(0,2),10);
+  const hh = parseInt(ddhhmm.slice(2,4),10);
+  const mm = parseInt(ddhhmm.slice(4,6),10);
+  let d = new Date(Date.UTC(refNow.getUTCFullYear(), refNow.getUTCMonth(), dd, hh, mm, 0));
+  if(d.getTime() > refNow.getTime() + 60*60*1000){
+    d = new Date(Date.UTC(refNow.getUTCFullYear(), refNow.getUTCMonth()-1, dd, hh, mm, 0));
+  }
+  return d.getTime();
+}
+function checkMissedObservation(groups){
+  if(!groups.time) return null;
+  const obsTs = ddhhmmToTimestamp(groups.time.slice(0,6), new Date());
+  const gapMin = (Date.now() - obsTs) / 60000;
+  if(gapMin > MISSED_OBS_THRESHOLD_MIN){
+    return `No new METAR observation in ${Math.round(gapMin)} minutes (last: ${groups.time}) — station may be off-line or a report may have been missed. VNKT normally reports every 30 minutes.`;
+  }
+  return null;
+}
+
 const DEW_JUMP_THRESHOLD = 5;    // °C
 const QNH_JUMP_THRESHOLD = 3;    // hPa
 const WIND_SPEED_JUMP_THRESHOLD = 15; // kt
@@ -563,13 +602,17 @@ async function loadServerHistory(){
     const res = await fetch(`${CUSTOM_PROXY}/history`);
     if(!res.ok) throw new Error('status '+res.status);
     const all = await res.json();
-    const metarList = all.filter(e=>e.type==='METAR');
+    const metarList = all.filter(e=>e.type==='METAR' || e.type==='ALERT');
     const tafList = all.filter(e=>e.type==='TAF');
     renderLogInto('logHistory', metarList);
     renderLogInto('tafLogHistory', tafList);
     const stamp = new Date().toUTCString().slice(17,25)+'Z';
-    statusEl.textContent = `Updated ${stamp} · ${metarList.length} entries`;
-    tafStatusEl.textContent = `Updated ${stamp} · ${tafList.length} entries`;
+    const metarOk = metarList.filter(e=>e.issues===0).length;
+    const metarBad = metarList.length - metarOk;
+    const tafOk = tafList.filter(e=>e.issues===0).length;
+    const tafBad = tafList.length - tafOk;
+    statusEl.textContent = `Updated ${stamp} · ${metarList.length} entries · ${metarOk} correct / ${metarBad} flagged`;
+    tafStatusEl.textContent = `Updated ${stamp} · ${tafList.length} entries · ${tafOk} correct / ${tafBad} flagged`;
   } catch(e){
     statusEl.textContent = 'Could not load server history: '+e.message;
     tafStatusEl.textContent = 'Could not load server history: '+e.message;
@@ -642,6 +685,7 @@ function renderResult(result, sourceLabel){
   const banner = document.getElementById('banner');
   const dot = document.getElementById('statusDot');
   const hasIssue = errors.length>0 || warnings.length>0;
+  metarHasIssue = hasIssue;
   if(hasIssue){
     banner.className = 'banner show pulse';
     banner.textContent = errors.length
@@ -649,12 +693,11 @@ function renderResult(result, sourceLabel){
       : `${warnings.length} significant-weather caution(s) flagged.`;
     setTimeout(()=>banner.classList.remove('pulse'), 2000);
     dot.className = 'dot bad';
-    if(armed) startSiren();
   } else {
     banner.className = 'banner';
     dot.className = 'dot ok';
-    stopSiren();
   }
+  updateSirenState();
 }
 
 /* ---------- Fetching ---------- */
@@ -854,6 +897,8 @@ async function doFetch(){
     const result = parseMetar(line);
     const trendCautions = compareToPrevious(icao, result.groups);
     result.warnings = result.warnings.concat(trendCautions);
+    const missedMsg = checkMissedObservation(result.groups);
+    if(missedMsg) result.warnings = result.warnings.concat([missedMsg]);
     const viaLabel = via==='proxy' ? 'via backup proxy (direct connection blocked)' : 'direct';
     renderResult(result, `Live from aviationweather.gov · ${icao} · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
   } catch(err){
@@ -937,14 +982,15 @@ async function doFetchTaf(){
     metaEl.textContent = `Source: Ogimet · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`;
     const log = document.getElementById('tafLogList');
     log.innerHTML='';
+    tafHasIssue = warnings.length>0;
     if(warnings.length){
       warnings.forEach(w=>{
         const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
       });
-      if(armed) startSiren();
     } else {
       log.innerHTML = '<div class="log-item none">No coding errors or significant weather flagged.</div>';
     }
+    updateSirenState();
   } catch(err){
     stripEl.textContent = `Could not fetch TAF: ${err.message==='ALL_ROUTES_FAILED' ? 'all routes (direct + proxies) failed.' : err.message}`;
     stripEl.classList.add('empty');
@@ -968,6 +1014,7 @@ document.getElementById('tafManualBtn').addEventListener('click', ()=>{
   renderTafChecklist(stripEl.textContent, icao);
   const log = document.getElementById('tafLogList');
   log.innerHTML='';
+  tafHasIssue = warnings.length>0;
   if(warnings.length){
     warnings.forEach(w=>{
       const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
@@ -975,6 +1022,7 @@ document.getElementById('tafManualBtn').addEventListener('click', ()=>{
   } else {
     log.innerHTML = '<div class="log-item none">No coding errors or significant weather flagged.</div>';
   }
+  updateSirenState();
 });
 
 let tafAutoTimer=null, tafAutoOn=false, tafCountdown=0;
