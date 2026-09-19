@@ -339,6 +339,7 @@ const WIND_RE = /^(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?(KT|MPS|KMH)$/;
 const WINDVAR_RE = /^\d{3}V\d{3}$/;
 const VIS4_RE = /^(\d{4})(NDV)?$/;
 const VISSM_RE = /^(M|P)?\d{1,2}(\/\d{1,2})?SM$/;
+const MINVIS_DIR_RE = /^\d{4}(N|NE|E|SE|S|SW|W|NW)$/;
 const RVR_RE = /^R\d{2}[LCR]?\/[MP]?\d{4}(V[MP]?\d{4})?(FT)?[UDN]?$/;
 const CLOUD_RE = /^(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?$/;
 const VV_RE = /^VV(\d{3}|\/\/\/)$/;
@@ -391,6 +392,8 @@ function parseMetar(raw){
       const v=parseInt(m4[1],10);
       if(v<1500) warnings.push(`Low visibility reported (${v} m).`);
     }
+    // Optional minimum visibility in a specified direction, e.g. "4000NE"
+    if(MINVIS_DIR_RE.test(next()||'')) groups.minVisibility = consume();
   } else {
     errors.push('Missing or invalid visibility group.');
   }
@@ -590,7 +593,7 @@ setMainTab('METAR');
 const CHECK_ROWS = [
   ['STATION/TIME', r=>[r.groups.station, r.groups.time].filter(Boolean).join(' '), r=>!r.groups.station || !r.groups.time],
   ['WIND', r=>[r.groups.wind, r.groups.windVar].filter(Boolean).join(' '), r=>!r.groups.wind],
-  ['VISIBILITY', r=>[r.groups.visibility, r.groups.rvr].filter(Boolean).join(' '), r=>!r.groups.visibility],
+  ['VISIBILITY', r=>[r.groups.visibility, r.groups.minVisibility, r.groups.rvr].filter(Boolean).join(' '), r=>!r.groups.visibility],
   ['WEATHER', r=>r.groups.weather||'—', r=>false],
   ['CLOUD', r=>r.groups.cloud||'—', r=>false],
   ['TEMP/DEW', r=>r.groups.tempDew, r=>!r.groups.tempDew],
