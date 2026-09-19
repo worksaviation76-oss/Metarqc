@@ -755,20 +755,8 @@ async function fetchTaf(icao){
 }
 
 function checkTafFormat(taf, icao){
-  const warnings = [];
-  const headerMatch = taf.match(new RegExp(`^TAF\\s+(AMD\\s+|COR\\s+)?${icao}\\s+(\\d{2})(\\d{2})\\d{2}Z`));
-  if(!headerMatch){
-    warnings.push('TAF header does not match expected format (TAF ICAO DDHHMMZ).');
-  } else {
-    const issueHour = headerMatch[3];
-    if(!TAF_ISSUE_HOURS.includes(issueHour)){
-      warnings.push(`TAF issue time (${issueHour}Z) is outside the standard issuance hours for this station (05/11/17/23Z) — may be a delayed or amended bulletin.`);
-    }
-  }
-  if(!/\d{4}\/\d{4}/.test(taf)){
-    warnings.push('No validity period (DDHH/DDHH) found in the TAF.');
-  }
-  return warnings;
+  const parsed = parseTaf(taf, icao);
+  return [...parsed.errors, ...parsed.warnings];
 }
 
 /* ---------- TAF group decoder (for the DECODED GROUPS display) ---------- */
@@ -776,20 +764,26 @@ const CHANGE_KW_RE = /^(BECMG|TEMPO|FM\d{6}|PROB\d{2})$/;
 
 function parseTafConditions(tokens, start){
   // Consume wind/visibility/weather/cloud groups (same shapes as METAR) until the
-  // next change-group keyword or end of tokens. Returns {cond, next index}.
+  // next change-group keyword or end of tokens. Returns {cond, invalid, next index}.
   let i = start;
   const next=()=>tokens[i];
   const cond = {};
   if(WIND_RE.test(next()||'')) cond.wind = tokens[i++];
   if(next()==='CAVOK' || VIS4_RE.test(next()||'') || VISSM_RE.test(next()||'')) cond.visibility = tokens[i++];
   const wx=[];
-  while(WX_RE.test(next()||'') && !CHANGE_KW_RE.test(next()||'') && wx.length<4) wx.push(tokens[i++]);
+  if(next()==='NSW') wx.push(tokens[i++]);
+  else while(WX_RE.test(next()||'') && !CHANGE_KW_RE.test(next()||'') && wx.length<4) wx.push(tokens[i++]);
   if(wx.length) cond.weather = wx.join(' ');
   const cloud=[];
   if(/^(NSC|SKC)$/.test(next()||'')) cloud.push(tokens[i++]);
   else while((CLOUD_RE.test(next()||'') || VV_RE.test(next()||'')) ) cloud.push(tokens[i++]);
   if(cloud.length) cond.cloud = cloud.join(' ');
-  return {cond, next:i};
+  // Anything left before the next change-group keyword (or end) didn't match any
+  // known group shape — flag it explicitly instead of letting it silently vanish
+  // or reappear unlabeled later.
+  const invalid=[];
+  while(i < tokens.length && !CHANGE_KW_RE.test(tokens[i])) invalid.push(tokens[i++]);
+  return {cond, invalid, next:i};
 }
 
 function parseTaf(raw, icao){
@@ -803,14 +797,21 @@ function parseTaf(raw, icao){
   if(next()==='TAF') i++;
   if(/^(AMD|COR)$/.test(next()||'')) { result.modifier = tokens[i++]; }
   if(/^[A-Z]{4}$/.test(next()||'')) { result.station = tokens[i++]; } else { errors.push('Missing or invalid ICAO station identifier.'); }
-  if(/^\d{6}Z$/.test(next()||'')) { result.issueTime = tokens[i++]; } else { errors.push('Missing or invalid issue time (expected DDHHMMZ).'); }
+  if(/^\d{6}Z$/.test(next()||'')) {
+    result.issueTime = tokens[i++];
+    const issueHour = result.issueTime.slice(2,4);
+    if(!TAF_ISSUE_HOURS.includes(issueHour)){
+      warnings.push(`TAF issue time (${issueHour}Z) is outside the standard issuance hours for this station (05/11/17/23Z) — may be a delayed or amended bulletin.`);
+    }
+  } else { errors.push('Missing or invalid issue time (expected DDHHMMZ).'); }
   if(/^\d{4}\/\d{4}$/.test(next()||'')) { result.validity = tokens[i++]; } else { errors.push('Missing or invalid validity period (expected DDHH/DDHH).'); }
 
-  const {cond, next:afterBase} = parseTafConditions(tokens, i);
+  const {cond, invalid:baseInvalid, next:afterBase} = parseTafConditions(tokens, i);
   result.base = cond;
   i = afterBase;
   if(!cond.wind) warnings.push('No base wind group found in the TAF.');
   if(!cond.visibility) warnings.push('No base visibility group found in the TAF.');
+  if(baseInvalid.length){ result.baseInvalid = baseInvalid.join(' '); errors.push(`Unrecognized/invalid group(s) in base forecast: ${baseInvalid.join(' ')}`); }
 
   while(i < tokens.length && CHANGE_KW_RE.test(tokens[i])){
     const kw = tokens[i++];
@@ -827,9 +828,10 @@ function parseTaf(raw, icao){
       if(/^\d{4}\/\d{4}$/.test(next()||'')) sub.period = tokens[i++];
       else warnings.push(`${kw} group missing its DDHH/DDHH validity sub-period.`);
     }
-    const {cond:c2, next:afterCond} = parseTafConditions(tokens, i);
+    const {cond:c2, invalid:changeInvalid, next:afterCond} = parseTafConditions(tokens, i);
     sub.cond = c2;
     i = afterCond;
+    if(changeInvalid.length){ sub.invalid = changeInvalid.join(' '); errors.push(`Unrecognized/invalid group(s) in ${kw} group: ${changeInvalid.join(' ')}`); }
     result.changes.push(sub);
   }
 
@@ -882,19 +884,21 @@ function renderTafChecklist(taf, icao){
   const parsed = parseTaf(taf, icao);
   const el = document.getElementById('tafChecklist');
   const rows = [];
-  rows.push(['HEADER', [parsed.modifier, parsed.station, parsed.issueTime].filter(Boolean).join(' ') || '—', !parsed.station || !parsed.issueTime]);
-  rows.push(['VALIDITY', parsed.validity || '—', !parsed.validity]);
+  const headerLine = [parsed.modifier, parsed.station, parsed.issueTime, parsed.validity].filter(Boolean).join(' ') || '—';
+  rows.push(['TAF', headerLine, !parsed.station || !parsed.issueTime || !parsed.validity]);
   rows.push(['BASE WIND', parsed.base.wind || '—', !parsed.base.wind]);
   rows.push(['BASE VISIBILITY', parsed.base.visibility || '—', !parsed.base.visibility]);
   rows.push(['BASE WEATHER', parsed.base.weather || '—', false]);
   rows.push(['BASE CLOUD', parsed.base.cloud || '—', false]);
+  if(parsed.baseInvalid) rows.push(['BASE — INVALID', parsed.baseInvalid, true]);
   parsed.changes.forEach((c,idx)=>{
     const parts = [c.type];
     if(c.tempo) parts.push('TEMPO');
     if(c.period) parts.push(c.period);
     if(c.time) parts.push(c.time);
     ['wind','visibility','weather','cloud'].forEach(k=>{ if(c.cond[k]) parts.push(c.cond[k]); });
-    rows.push([`CHANGE ${idx+1}`, parts.join(' '), false]);
+    rows.push([`CHANGE ${idx+1}`, parts.join(' '), !!c.invalid]);
+    if(c.invalid) rows.push([`CHANGE ${idx+1} — INVALID`, c.invalid, true]);
   });
   if(parsed.extra) rows.push(['SUPPL. TEXT', parsed.extra, false]);
 
