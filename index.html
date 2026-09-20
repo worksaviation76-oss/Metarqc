@@ -743,7 +743,11 @@ async function fetchViaRoutes(url, extractFn){
 
 function extractMetarLine(text){
   const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
-  return lines.find(l=>/^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(l)) || lines[0] || null;
+  // Only accept a line that actually looks like a METAR/SPECI report. If nothing
+  // matches (e.g. a proxy returned an HTML error page instead of AWC's plain
+  // text), return null so the caller correctly treats this route as failed and
+  // tries the next one — never silently accept garbage as "the observation."
+  return lines.find(l=>/^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(l)) || null;
 }
 
 async function fetchStation(icao){
