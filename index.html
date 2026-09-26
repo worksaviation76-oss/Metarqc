@@ -181,6 +181,7 @@
       <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
       <button id="autoBtn">Auto-refresh 2 min</button>
       <button id="metarSirenBtn" data-armed-label="METAR alert armed — click to mute" data-idle-label="Arm METAR alert">Arm METAR alert</button>
+      <button id="metarStopSirenBtn">Stop this siren</button>
     </div>
 
     <div class="strip-label">RAW OBSERVATION</div>
@@ -240,6 +241,7 @@
       <span class="autorefresh" id="tafAutoLabel">TAF auto-check off</span>
       <button id="tafAutoBtn">Auto-check TAF (15 min)</button>
       <button id="tafSirenBtn" data-armed-label="TAF alert armed — click to mute" data-idle-label="Arm TAF alert">Arm TAF alert</button>
+      <button id="tafStopSirenBtn">Stop this siren</button>
     </div>
 
     <div class="strip-label">TAF — issued 0500 / 1100 / 1700 / 2300 UTC only (source: Ogimet)</div>
@@ -303,6 +305,8 @@ setInterval(tickClock,1000); tickClock();
 let audioCtx=null, sirenOn=false, sirenTimer=null;
 let metarArmed=false, tafArmed=false;
 let metarHasIssue=false, tafHasIssue=false;
+let metarCurrentRaw=null, tafCurrentRaw=null;
+let metarAckedRaw=null, tafAckedRaw=null;
 function ensureCtx(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
 function sirenPulse(){
   ensureCtx();
@@ -325,8 +329,9 @@ function stopSiren(){ sirenOn=false; if(sirenTimer) clearInterval(sirenTimer); s
 // armed + issue state combined — so muting one type never silences the other's
 // active alert, and unmuting a type with an already-active issue starts it right away.
 function updateSirenState(){
-  const shouldSound = (metarArmed && metarHasIssue) || (tafArmed && tafHasIssue);
-  if(shouldSound) startSiren(); else stopSiren();
+  const metarShould = metarArmed && metarHasIssue && metarCurrentRaw!==metarAckedRaw;
+  const tafShould = tafArmed && tafHasIssue && tafCurrentRaw!==tafAckedRaw;
+  if(metarShould || tafShould) startSiren(); else stopSiren();
 }
 
 function wireArmButton(btnId, getArmed, setArmed){
@@ -339,14 +344,30 @@ function wireArmButton(btnId, getArmed, setArmed){
       btn.textContent = btn.dataset.armedLabel;
       btn.classList.add('armed');
     } else {
+      // Muting acknowledges whatever's currently showing, so re-arming later
+      // doesn't immediately re-sound for the SAME reading — only a genuinely
+      // new one will trigger it again.
       btn.textContent = btn.dataset.idleLabel;
       btn.classList.remove('armed');
+      if(btnId==='metarSirenBtn') metarAckedRaw = metarCurrentRaw;
+      if(btnId==='tafSirenBtn') tafAckedRaw = tafCurrentRaw;
     }
     updateSirenState();
   });
 }
 wireArmButton('metarSirenBtn', ()=>metarArmed, v=>{metarArmed=v;});
 wireArmButton('tafSirenBtn', ()=>tafArmed, v=>{tafArmed=v;});
+
+// Stop-siren buttons: silence the CURRENT alarm only, without disarming — stays
+// armed, so a different/new bad reading later will auto-sound with no extra clicks.
+document.getElementById('metarStopSirenBtn').addEventListener('click', ()=>{
+  metarAckedRaw = metarCurrentRaw;
+  updateSirenState();
+});
+document.getElementById('tafStopSirenBtn').addEventListener('click', ()=>{
+  tafAckedRaw = tafCurrentRaw;
+  updateSirenState();
+});
 
 
 /* ---------- METAR PARSER ---------- */
@@ -602,8 +623,8 @@ async function loadServerHistory(){
     const res = await fetch(`${CUSTOM_PROXY}/history`);
     if(!res.ok) throw new Error('status '+res.status);
     const all = await res.json();
-    const metarList = all.filter(e=>e.type==='METAR' || e.type==='ALERT');
-    const tafList = all.filter(e=>e.type==='TAF');
+    const metarList = all.filter(e=>e.type==='METAR' || (e.type==='ALERT' && e.alertFor!=='TAF'));
+    const tafList = all.filter(e=>e.type==='TAF' || (e.type==='ALERT' && e.alertFor==='TAF'));
     renderLogInto('logHistory', metarList);
     renderLogInto('tafLogHistory', tafList);
     const stamp = new Date().toUTCString().slice(17,25)+'Z';
@@ -686,6 +707,7 @@ function renderResult(result, sourceLabel){
   const dot = document.getElementById('statusDot');
   const hasIssue = errors.length>0 || warnings.length>0;
   metarHasIssue = hasIssue;
+  metarCurrentRaw = clean;
   if(hasIssue){
     banner.className = 'banner show pulse';
     banner.textContent = errors.length
@@ -987,6 +1009,7 @@ async function doFetchTaf(){
     const log = document.getElementById('tafLogList');
     log.innerHTML='';
     tafHasIssue = warnings.length>0;
+    tafCurrentRaw = taf;
     if(warnings.length){
       warnings.forEach(w=>{
         const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
@@ -1019,6 +1042,7 @@ document.getElementById('tafManualBtn').addEventListener('click', ()=>{
   const log = document.getElementById('tafLogList');
   log.innerHTML='';
   tafHasIssue = warnings.length>0;
+  tafCurrentRaw = stripEl.textContent;
   if(warnings.length){
     warnings.forEach(w=>{
       const d=document.createElement('div'); d.className='log-item warn'; d.textContent='TAF CAUTION — '+w; log.appendChild(d);
